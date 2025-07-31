@@ -1,1 +1,4 @@
 pynput
+pywin32
+pillow
+pyperclip  
