@@ -1,0 +1,11 @@
+On a besoin de deux machines : une machine attaquante et une machine cible.
+Utilisez pour les deux VM un réseau NAT ou en mode bridge afin d’assurer la connexion entre elles.
+
+Sur la machine attaquante, installez et lancez le script attaquant.py.
+
+Si les deux machines sont sous Windows, le ping peut ne pas fonctionner car Windows Defender peut bloquer les requêtes ICMP (ping).
+
+Dans le script key.py, modifiez l’adresse IP avec celle de la machine attaquante, puis lancez le script sur la machine cible.
+
+Enfin, lancez le script sur la machine victime pour établir la connexion.
+

